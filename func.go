@@ -57,10 +57,16 @@ func main() {
 			uri += "index.html"
 		}
 
+		var ifmatch *string
+		if tag := fctx.Header().Get("If-Modified-Since"); tag != "" {
+			ifmatch = common.String(tag)
+		}
+
 		getResponse, err := c.GetObject(ctx, objectstorage.GetObjectRequest{
 			NamespaceName: common.String(getNamespace(ctx, c)),
 			BucketName:    common.String(bucketName),
 			ObjectName:    common.String(uri),
+			IfMatch:       ifmatch,
 		})
 		if err != nil {
 			message := "error retrieving object"
