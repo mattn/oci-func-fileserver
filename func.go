@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -51,7 +52,13 @@ func main() {
 			fmt.Fprintln(out, "cannot get HTTP context")
 			return
 		}
-		uri := fctx.RequestURL()
+		uri, err := url.PathUnescape(fctx.RequestURL())
+		if err != nil {
+			log.Printf("cannot unescape path: %v\n", err)
+			fdk.WriteStatus(out, http.StatusInternalServerError)
+			fmt.Fprintln(out, "cannot unescape path")
+			return
+		}
 		uri = strings.TrimLeft(uri, "/")
 		if uri == "" || strings.HasSuffix(uri, "/") {
 			uri += "index.html"
