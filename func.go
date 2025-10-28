@@ -57,10 +57,16 @@ func main() {
 			uri += "index.html"
 		}
 
+		var ifNoneMatch *string
+		if tag := fctx.Header().Get("ETag"); tag != "" {
+			ifNoneMatch = common.String(tag)
+		}
+
 		getResponse, err := c.GetObject(ctx, objectstorage.GetObjectRequest{
 			NamespaceName: common.String(getNamespace(ctx, c)),
 			BucketName:    common.String(bucketName),
 			ObjectName:    common.String(uri),
+			IfNoneMatch:   ifNoneMatch,
 		})
 		if err != nil {
 			message := "error retrieving object"
