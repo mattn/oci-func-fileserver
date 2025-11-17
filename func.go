@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -9,12 +10,52 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 
 	fdk "github.com/fnproject/fdk-go"
 	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/oracle/oci-go-sdk/v65/common/auth"
 	"github.com/oracle/oci-go-sdk/v65/objectstorage"
 )
+
+var (
+	routes   map[string]map[string]string
+	initOnce sync.Once
+	initErr  error
+)
+
+func loadRoutesFromEnv() error {
+	v := os.Getenv("ROUTES")
+	if v == "" {
+		return fmt.Errorf("ROUTES env var is empty")
+	}
+
+	return json.Unmarshal([]byte(v), &routes)
+}
+
+func sanitizeHost(host string) string {
+	if i := strings.Index(host, ":"); i != -1 {
+		return host[:i]
+	}
+	return host
+}
+
+func matchBucket(host, path string) string {
+	hostCfg, ok := routes[host]
+	if !ok {
+		return ""
+	}
+
+	best := ""
+	for p := range hostCfg {
+		if strings.HasPrefix(path, p) {
+			if len(p) > len(best) {
+				best = p
+			}
+		}
+	}
+	return hostCfg[best]
+}
 
 func getNamespace(ctx context.Context, c objectstorage.ObjectStorageClient) string {
 	request := objectstorage.GetNamespaceRequest{}
@@ -26,11 +67,51 @@ func getNamespace(ctx context.Context, c objectstorage.ObjectStorageClient) stri
 }
 
 func main() {
-	bucketName := os.Getenv("BUCKET_NAME")
-	if bucketName == "" {
-		bucketName = "static"
-	}
 	fdk.Handle(fdk.HandlerFunc(func(ctx context.Context, in io.Reader, out io.Writer) {
+		initOnce.Do(func() {
+			initErr = loadRoutesFromEnv()
+		})
+
+		if initErr != nil {
+			io.WriteString(out, fmt.Sprintf("failed to load routes: %v", initErr))
+			return
+		}
+
+		fctx, ok := fdk.GetContext(ctx).(fdk.HTTPContext)
+		if !ok {
+			log.Println("cannot get HTTP context")
+			fdk.WriteStatus(out, http.StatusInternalServerError)
+			fmt.Fprintln(out, "cannot get HTTP context")
+			return
+		}
+
+		uri, err := url.PathUnescape(fctx.RequestURL())
+		if err != nil {
+			log.Printf("cannot unescape path: %v\n", err)
+			fdk.WriteStatus(out, http.StatusInternalServerError)
+			fmt.Fprintln(out, "cannot unescape path")
+			return
+		}
+
+		host := sanitizeHost(fctx.Header().Get("Host"))
+		bucketName := matchBucket(host, uri)
+		if bucketName == "" {
+			log.Printf("bucket does not match: %v%v\n", host, uri)
+			fdk.WriteStatus(out, http.StatusNotFound)
+			fmt.Fprintln(out, "bucket does not match")
+			return
+		}
+
+		uri = strings.TrimLeft(uri, "/")
+		if uri == "" || strings.HasSuffix(uri, "/") {
+			uri += "index.html"
+		}
+
+		var ifNoneMatch *string
+		if tag := fctx.Header().Get("ETag"); tag != "" {
+			ifNoneMatch = common.String(tag)
+		}
+
 		configurationProvider, err := auth.ResourcePrincipalConfigurationProvider()
 		if err != nil {
 			log.Printf("cannot create configuration provier: %v\n", err)
@@ -45,30 +126,6 @@ func main() {
 			fmt.Fprintln(out, "cannot create Object Storage client")
 			return
 		}
-		fctx, ok := fdk.GetContext(ctx).(fdk.HTTPContext)
-		if !ok {
-			log.Printf("cannot get HTTP context: %v\n", err)
-			fdk.WriteStatus(out, http.StatusInternalServerError)
-			fmt.Fprintln(out, "cannot get HTTP context")
-			return
-		}
-		uri, err := url.PathUnescape(fctx.RequestURL())
-		if err != nil {
-			log.Printf("cannot unescape path: %v\n", err)
-			fdk.WriteStatus(out, http.StatusInternalServerError)
-			fmt.Fprintln(out, "cannot unescape path")
-			return
-		}
-		uri = strings.TrimLeft(uri, "/")
-		if uri == "" || strings.HasSuffix(uri, "/") {
-			uri += "index.html"
-		}
-
-		var ifNoneMatch *string
-		if tag := fctx.Header().Get("ETag"); tag != "" {
-			ifNoneMatch = common.String(tag)
-		}
-
 		getResponse, err := c.GetObject(ctx, objectstorage.GetObjectRequest{
 			NamespaceName: common.String(getNamespace(ctx, c)),
 			BucketName:    common.String(bucketName),

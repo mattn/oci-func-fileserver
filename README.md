@@ -1,10 +1,13 @@
 # oci-func-fileserver
 
-OCI Object Storage Static File Server Function. This Oracle Cloud Infrastructure (OCI) Function serves static files from an Object Storage bucket as a simple HTTP server. It uses the Oracle Functions SDK (fdk-go) and authenticates via Resource Principal, making it suitable for deployment in OCI Functions without needing API keys.
+OCI Object Storage Static File Server Function.  
+This Oracle Cloud Infrastructure (OCI) Function serves static files from Object Storage as a simple HTTP server.  
+It uses the Oracle Functions SDK (fdk-go) and authenticates via **Resource Principal**, so no API keys are required.
 
 ## Features
 
-- Serves files from a specified OCI Object Storage bucket (default: "static").
+- Serves static files from **multiple** OCI Object Storage buckets.
+- Bucket is automatically selected based on **Host + Path** mapping defined in the `ROUTES` environment variable.
 - Automatically appends `index.html` for root (`/`) or directory paths (e.g., `/path/`).
 - Preserves object metadata headers (Content-Type, Cache-Control, ETag, etc.).
 - Handles common errors like 404 (ObjectNotFound) and 500 (internal errors).
@@ -14,13 +17,14 @@ OCI Object Storage Static File Server Function. This Oracle Cloud Infrastructure
 
 - [Go 1.18+](https://go.dev/doc/install) installed.
 - OCI CLI configured with appropriate permissions (for deployment).
-- An OCI Object Storage bucket with static files uploaded.
-- OCI Functions setup: Ensure you have `fn` CLI installed and configured ([Oracle Functions Quickstart](https://docs.oracle.com/en-us/iaas/Content/Functions/Tasks/functionsquickstart.htm)).
+- One or more OCI Object Storage buckets with static files uploaded.
+- OCI Functions setup: Ensure you have `fn` CLI installed and configured.  
+  ([Oracle Functions Quickstart](https://docs.oracle.com/en-us/iaas/Content/Functions/Tasks/functionsquickstart.htm))
 - Docker installed.
 
 Permissions required:
 - Resource Principal enabled on the function's compartment.
-- Read access to the target bucket (`objectstorage_object_get`, `objectstorage_object_head`).
+- Read access to the target buckets (`objectstorage_object_get`, `objectstorage_object_head`).
 
 ## Installation and Deployment
 
@@ -30,52 +34,81 @@ $ cd oci-func-fileserver
 $ fn deploy --app <your-function-app-name>
 ```
 
-## Customization
+## Configuration
 
-Set environment variable for bucket (optional, defaults to "static")
+### Bucket routing (required)
+
+Set the environment variable `ROUTES` to a JSON object containing:
 
 ```
-fn config function <your-function-app-name> oci-func-fileserver BUCKET_NAME my-bucket
+{
+  "<domain>": {
+    "<path-prefix>": "<bucket-name>"
+  }
+}
 ```
 
-## **Invoke the function:**
+### Example
 
-Now you can use this function as a static file server. And you can add this function to API Gateway to serve files over HTTP.
+```
+fn config function <your-function-app-name> oci-func-fileserver ROUTES '{
+  "example1.jp": { "/": "static-example1" },
+  "example2.jp": { "/": "static-example2" }
+}'
+```
 
-1. **Create an API Gateway** in OCI Console or via CLI.
+Prefix matching is supported, so more complex routing is possible:
 
-2. **Add a route** to your API Gateway that points to your function.
+```json
+{
+  "example1.jp": {
+    "/blog/": "blog-bucket",
+    "/assets/": "assets-bucket",
+    "/": "default-bucket"
+  }
+}
+```
 
-3. **Deploy the API Gateway**.
+## Invoke the function
 
-4. **Access your files** via the API Gateway endpoint.
+You can attach this function to an **API Gateway** and use it as a static file server:
 
-If you set up everything correctly, you should be able to access your static files using the API Gateway URL. If your certificate should be properly configured to use HTTPS, you can set up a custom domain and SSL certificate in API Gateway.
+1. Create an API Gateway.
+2. Add a route that points to this function.
+3. Deploy the API Gateway.
+4. Access files via the gateway URL or custom domain.
 
 ## Environment Variables
 
-| Variable       | Description                  | Default |
-|----------------|------------------------------|---------|
-| `BUCKET_NAME` | Name of the Object Storage bucket to serve from. | `static` |
+| Variable | Description |
+|----------|-------------|
+| `ROUTES` | JSON mapping of **host → path prefix → bucket**. Required. |
+
+There is **no `BUCKET_NAME`** anymore.  
+All routing is controlled via `ROUTES`.
 
 ## Usage
 
-- **URL Mapping:** The function strips the leading `/` from the request URL and uses it as the object name. Directories auto-resolve to `index.html`.
-  - `/` → `index.html` or Not Found
-  - `/images/logo.png` → `images/logo.png`
+- **URL Mapping:**  
+  The function strips the leading `/` and uses it as the object name.  
+  Directories auto-resolve to `index.html`.
+
+  - `/` → `index.html`  
+  - `/images/logo.png` → `images/logo.png`  
   - `/docs/` → `docs/index.html`
 
-- **Headers:** All relevant OCI object headers are forwarded (e.g., `Content-Type`, `Cache-Control`).
+- **Headers:**  
+  All relevant OCI object headers are forwarded (e.g., `Content-Type`, `Cache-Control`, `ETag`).
 
-- **Error Responses:**
-  - 404: Object not found.
-  - 500: Authentication, client creation, or retrieval errors.
+- **Error Responses:**  
+  - `404`: Object not found  
+  - `500`: Authentication, client creation, or retrieval errors  
 
 ## Limitations
 
-- Single bucket support.
-- No authentication/authorization on served files (public bucket or use OCI auth).
-- Assumes UTF-8 paths; handles basic URL trimming.
+- Changing routing requires updating the function's environment variables.
+- No authentication/authorization on served files.
+- Assumes UTF-8 paths.
 
 ## License
 
